@@ -51,11 +51,12 @@ my_recipe <- recipe(count~., data = trainData) |>
   step_zv(all_predictors()) |> 
   step_mutate(holiday = factor(holiday), levels = 2) |>
   step_mutate(workingday = factor(workingday), levels = 2) |> 
-  step_poly(windspeed, degree=2)
+  step_poly(windspeed, degree=2) |> 
+  step_mutate(datetime_hour = factor(datetime_hour), levels = 24)
 
 
 bike_recipe <- prep(my_recipe) # Sets up the preprocessing using myDataSet
-bake(prepped_recipe, new_data=trainData)
+bake(bike_recipe, new_data=trainData)
 
 
 ## Define a Model
@@ -82,7 +83,7 @@ kaggle_submission_feature_engineering <- lin_preds %>%
   mutate(datetime=as.character(format(datetime))) #needed for right
 
 ## Write out the file
-vroom_write(x=kaggle_submission_feature_engineering, file="./FeatureEngineeringPreds4.csv", delim=",")
+vroom_write(x=kaggle_submission_feature_engineering, file="./FeatureEngineeringPreds7.csv", delim=",")
 
 
 # -------------------------------------------------------------------------
