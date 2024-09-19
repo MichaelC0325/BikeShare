@@ -5,6 +5,7 @@ library(ggplot2)
 library(GGally)
 library(DataExplorer)
 library(patchwork)
+library(glmnet)
 
 ggpairs(dataset)
 plot_intro(dataset)
@@ -34,7 +35,9 @@ weather_plot <- ggplot(data, aes(x = weather)) +
 (weather_plot + temp_plot) / (windspeed_plot + humidity_plot)
 
 
-# -------------------------------------------------------------------------
+# feature engineering -----------------------------------------------------
+
+
 trainData <- vroom("train.csv")
 testData <- vroom("test.csv")
 
@@ -86,8 +89,64 @@ kaggle_submission_feature_engineering <- lin_preds %>%
 vroom_write(x=kaggle_submission_feature_engineering, file="./FeatureEngineeringPreds7.csv", delim=",")
 
 
-# -------------------------------------------------------------------------
 
+# penalized regression ----------------------------------------------------
+
+
+trainData <- vroom("train.csv")
+testData <- vroom("test.csv")
+
+#Penalized regression
+trainData <- trainData |> 
+  select(-casual, -registered) |> 
+  mutate(count = log(count))
+
+my_recipe <- recipe(count~., data = trainData) |> 
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) |> 
+  step_mutate(weather = factor(weather), levels = 3) |> 
+  step_time(datetime, features = c("hour", "minute")) |> 
+  step_mutate(season=factor(season, levels= 4)) |> 
+  step_zv(all_predictors()) |> 
+  step_mutate(holiday = factor(holiday), levels = 2) |>
+  step_mutate(workingday = factor(workingday), levels = 2) |> 
+  step_poly(windspeed, degree=2) |> 
+  step_mutate(datetime_hour = factor(datetime_hour), levels = 24) |> 
+  step_rm(datetime) |> 
+  step_dummy(all_nominal_predictors()) %>% #make dummy variables
+  step_normalize(all_numeric_predictors()) # Make mean 0, sd=1
+
+
+bike_recipe <- prep(my_recipe) # Sets up the preprocessing using myDataSet
+bake(bike_recipe, new_data=trainData)
+
+## Penalized regression model
+penalized_model <- linear_reg(penalty=.01, mixture=0) %>% #Set model and tuning
+  set_engine("glmnet")# Function to fit in R
+
+
+preg_wf <- workflow() %>%
+add_recipe(my_recipe) %>%
+add_model(penalized_model) %>%
+fit(data=trainData)
+
+## Run all the steps on test data
+penalized_preds <- predict(preg_wf, new_data = testData)
+penalized_preds = exp(penalized_preds)
+
+## Format the Predictions for Submission to Kaggle
+kaggle_submission_feature_engineering <- penalized_preds %>%
+  bind_cols(., testData) %>% #Bind predictions with test data
+  select(datetime, .pred) %>% #Just keep datetime and prediction va
+  rename(count=.pred) %>% #rename pred to count (for submission to
+  mutate(datetime=as.character(format(datetime))) #needed for right
+
+## Write out the file
+vroom_write(x=kaggle_submission_feature_engineering, file="./PenlizedPreds10.csv", delim=",")
+
+
+
+
+# -------------------------------------------------------------------------
 
 
 library(tidymodels)
