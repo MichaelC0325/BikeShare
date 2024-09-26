@@ -204,3 +204,149 @@ bind_cols(., testData) %>% #Bind predictions with test data
 ## Write out the file
 vroom_write(x=pois_kaggle_submission, file="./PoissonPreds.csv", delim=",")
 
+
+# Regression Trees --------------------------------------------------------
+
+library(tidymodels)
+
+
+trainData <- vroom("train.csv")
+testData <- vroom("test.csv")
+
+my_mod <- decision_tree(tree_depth = tune(),
+                        cost_complexity = tune(),
+                        min_n = tune()) |> 
+set_engine("rpart") |> 
+set_mode("regression")
+
+my_recipe <- recipe(count~., data = trainData) |> 
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) |> 
+  step_mutate(weather = factor(weather), levels = 3) |> 
+  step_time(datetime, features = c("hour", "minute")) |> 
+  step_mutate(season=factor(season, levels= 4)) |> 
+  step_mutate(holiday = factor(holiday), levels = 2) |>
+  step_mutate(workingday = factor(workingday), levels = 2) |> 
+  step_poly(windspeed, degree=2) |> 
+  step_mutate(datetime_hour = factor(datetime_hour), levels = 24) |> 
+  step_rm(datetime)
+
+my_recipe <- recipe(count ~ ., data = trainData) |> 
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) |>  # Adjust weather
+  step_mutate(weather = factor(weather)) |>                  # Convert weather to factor
+  step_time(datetime, features = c("hour", "minute")) |>      # Extract time features
+  step_mutate(season = factor(season, levels = 1:4)) |>       # Convert season to factor
+  step_mutate(holiday = factor(holiday, levels = c(0, 1))) |> # Convert holiday to factor
+  step_mutate(workingday = factor(workingday, levels = c(0, 1))) |> # Convert workingday to factor
+  step_poly(windspeed, degree = 2) |>                         # Apply polynomial transformation
+  step_rm(datetime)                                           # Remove datetime
+
+
+
+tree_wf <- workflow() %>%
+  add_recipe(my_recipe) |> 
+  add_model(my_mod) %>%
+  fit(data=trainData)
+
+## Run all the steps on test data
+tree_preds <- predict(tree_wf, new_data = testData)
+tree_preds = exp(tree_preds)
+
+## Format the Predictions for Submission to Kaggle
+kaggle_submission_feature_engineering <- tree_preds %>%
+  bind_cols(., testData) %>% #Bind predictions with test data
+  select(datetime, .pred) %>% #Just keep datetime and prediction va
+  rename(count=.pred) %>% #rename pred to count (for submission to
+  mutate(datetime=as.character(format(datetime))) #needed for right
+
+## Write out the file
+vroom_write(x=kaggle_submission_feature_engineering, file="./TreePreds.csv", delim=",")
+
+
+# Regression Trees --------------------------------------------------------
+
+library(tidymodels)
+
+trainData <- vroom("train.csv")
+testData <- vroom("test.csv")
+
+trainData <- trainData |> 
+  select(-casual, -registered) |> 
+  mutate(count = log(count))
+
+my_mod <- rand_forest(mtry = tune(),
+                      min_n=tune(),
+                      trees=500) %>% #Type of model
+  set_engine("ranger") %>% # What R function to use
+  set_mode("regression")
+
+## Create a workflow with model & recipe
+
+my_recipe <- recipe(count~., data = trainData) |> 
+  step_mutate(weather = ifelse(weather == 4, 3, weather)) |> 
+  step_mutate(weather = factor(weather), levels = 3) |> 
+  step_time(datetime, features = c("hour", "minute")) |> 
+  step_mutate(season=factor(season, levels= 4)) |> 
+  step_zv(all_predictors()) |> 
+  step_mutate(holiday = factor(holiday), levels = 2) |>
+  step_mutate(workingday = factor(workingday), levels = 2) |> 
+  step_poly(windspeed, degree=2) |> 
+  step_mutate(datetime_hour = factor(datetime_hour), levels = 24) |> 
+  step_rm(datetime)
+
+forest_wf <- workflow() %>%
+add_recipe(my_recipe) %>%
+add_model(my_mod)
+
+## Set up grid of tuning values
+
+grid_of_tuning_params <- grid_regular(penalty(),
+                                      mixture(),
+                                      levels = 5) ## L^2 total tuning possibilities
+
+# mtry(range = c(1,10), min_n()
+
+grid_of_tuning_params <- grid_regular(
+  mtry(range = c(2, 10)),
+  min_n(range = c(1, 10)),
+  levels = 5
+)
+
+## Set up K-fold CV
+
+folds <- vfold_cv(trainData, v = 5, repeats=1)
+
+## Find best tuning parameters
+
+## Run the CV1
+CV_results <- forest_wf %>%
+tune_grid(resamples=folds,
+          grid=grid_of_tuning_params,
+          metrics=metric_set(rmse, mae, rsq)) #Or leave metrics NULL
+
+## Find Best Tuning Parameters
+bestTune <- CV_results %>%
+select_best(metric = "rmse")
+
+## Finalize workflow and predict
+
+# Finalize the Workflow & fit it
+final_wf <-
+forest_wf %>%
+finalize_workflow(bestTune) %>%
+fit(data=trainData)
+
+## Predict
+forest_preds <- final_wf %>%
+predict(new_data = testData)
+
+forest_preds <- exp(forest_preds)
+
+## Format the Predictions for Submission to Kaggle
+kaggle_submission_feature_engineering <- forest_preds %>%
+  bind_cols(., testData) %>% #Bind predictions with test data
+  select(datetime, .pred) %>% #Just keep datetime and prediction va
+  rename(count=.pred) %>% #rename pred to count (for submission to
+  mutate(datetime=as.character(format(datetime))) #needed for right
+
+## Write out the file
+vroom_write(x=kaggle_submission_feature_engineering, file="./ForestPreds.csv", delim=",")
